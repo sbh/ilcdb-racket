@@ -31,7 +31,7 @@
   (let ([conn (get-connection)])
     (let* ([result (query-rows conn "SELECT * FROM country")])
       (disconnect conn)
-      (map (lambda (row) (apply make-country row)) result))))
+      (map (lambda (row) (apply make-country (vector->list row))) result))))
 
 (define (country-update id name)
   (let ([conn (get-connection)])

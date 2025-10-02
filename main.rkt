@@ -6,18 +6,25 @@
 (require web-server/web-server
          (prefix-in sequencer: web-server/dispatchers/dispatch-sequencer)
          "api/person.rkt"
-         "api/address.rkt"
+         "api/country.rkt"
          "api/birth-place.rkt"
-         "api/country.rkt")
+         "api/address.rkt")
 
 (define shutdown-server #f)
 
-;; (define main-dispatcher
-;;   (sequencer:make person-api-dispatcher address-api-dispatcher birth-place-api-dispatcher country-api-dispatcher))
+;; The sequencer:make function expects dispatchers that take two arguments
+;; (connection and request), but our API dispatchers only take one (request).
+;; We wrap each in a lambda to adapt the signature.
+(define main-dispatcher
+  (sequencer:make
+   (lambda (conn req) (person-api-dispatcher req))
+   (lambda (conn req) (country-api-dispatcher req))
+   (lambda (conn req) (birth-place-api-dispatcher req))
+   (lambda (conn req) (address-api-dispatcher req))))
 
 (define (start-in-background)
   (set! shutdown-server
-        (serve #:dispatch (lambda (conn req) (person-api-dispatcher req))
+        (serve #:dispatch main-dispatcher
                #:port 8080)))
 
 (define (stop-from-background)
@@ -27,7 +34,7 @@
 
 (define (main)
   (define shutdown
-    (serve #:dispatch (lambda (conn req) (person-api-dispatcher req))
+    (serve #:dispatch main-dispatcher
            #:port 8080))
   (displayln "Server started. Press Ctrl+C to stop.")
   (sync/enable-break (make-semaphore 0))

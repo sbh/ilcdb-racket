@@ -45,7 +45,7 @@
   (define state (hash-ref json-body 'state))
   (define postal-code (hash-ref json-body 'postal-code))
   (define country-id (hash-ref json-body 'country-id))
-  (define person-id (hash-ref json-body 'person-id))
+  (define person-id (hash-ref json-body 'person-id #f))
   (define new-id (address-create street city county state postal-code country-id person-id))
   (response/jsexpr (hasheq 'id new-id)))
 

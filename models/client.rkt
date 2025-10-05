@@ -4,7 +4,7 @@
          client?
          client-id
          client-version
-         client-client-id
+         client-client-id ; This corresponds to the person.id
          client-first-visit
          client-first-visit-string
          client-household-income-level
@@ -12,6 +12,8 @@
          client-file-location
          client-ami-id
          client->jsexpr)
+
+(require gregor)
 
 (define-struct client
   (id
@@ -28,7 +30,7 @@
   (hasheq 'id (client-id c)
           'version (client-version c)
           'client-id (client-client-id c)
-          'first-visit (client-first-visit c)
+          'first-visit (and (client-first-visit c) (datetime->iso8601 (client-first-visit c)))
           'first-visit-string (client-first-visit-string c)
           'household-income-level (client-household-income-level c)
           'number-in-household (client-number-in-household c)

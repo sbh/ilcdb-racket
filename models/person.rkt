@@ -1,7 +1,5 @@
 #lang racket
 
-(require gregor)
-
 (provide make-person
          person?
          person-id
@@ -17,6 +15,8 @@
          person-place-of-birth-id
          person-race
          person->jsexpr)
+
+(require gregor)
 
 (define-struct person
   (id
@@ -41,7 +41,7 @@
           'last-name (person-last-name p)
           'gender (person-gender p)
           'email-address (person-email-address p)
-          'date-of-birth (and (person-date-of-birth p) (~t (person-date-of-birth p) "yyyy-MM-dd'T'HH:mm:ss"))
+          'date-of-birth (and (person-date-of-birth p) (datetime->iso8601 (person-date-of-birth p)))
           'phone-number (person-phone-number p)
           'place-of-birth-id (person-place-of-birth-id p)
           'race (person-race p)))

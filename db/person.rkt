@@ -1,48 +1,67 @@
 #lang racket
 
-(require db
-         "../models/person.rkt"
-         "connection.rkt")
-
 (provide person-create
          person-read
          person-read-all
          person-update
          person-delete)
 
-(define (person-create first-name last-name phone-number date-of-birth english-proficiency email-address gender race address-id place-of-birth-id)
+(require db
+         db/base
+         "../models/person.rkt"
+         "connection.rkt")
+
+(define select-cols "SELECT `id`, `version`, `address_id`, `english_proficiency`, `first_name`, `last_name`, `gender`, `email_address`, `date_of_birth`, `phone_number`, `place_of_birth_id`, `race` FROM `person`")
+
+(define (row->person-struct row)
+  (make-person (vector-ref row 0)
+               (vector-ref row 1)
+               (vector-ref row 2)
+               (vector-ref row 3)
+               (vector-ref row 4)
+               (vector-ref row 5)
+               (vector-ref row 6)
+               (vector-ref row 7)
+               (vector-ref row 8)
+               (vector-ref row 9)
+               (vector-ref row 10)
+               (vector-ref row 11)))
+
+(define (person-create address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
   (let ([conn (get-connection)])
-    (query-exec
-     conn
-     "INSERT INTO person (version, first_name, last_name, phone_number, date_of_birth, english_proficiency, email_address, gender, race, address_id, place_of_birth_id) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-     first-name last-name phone-number date-of-birth english-proficiency email-address gender race address-id place-of-birth-id)
-    (let ([result (query-value conn "SELECT LAST_INSERT_ID()")])
-      (disconnect conn)
-      result)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "INSERT INTO `person` (`version`, `address_id`, `english_proficiency`, `first_name`, `last_name`, `gender`, `email_address`, `date_of_birth`, `phone_number`, `place_of_birth_id`, `race`) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
+        (query-value conn "SELECT LAST_INSERT_ID()"))
+      (lambda () (disconnect conn)))))
 
 (define (person-read id)
-  (let ([conn (get-connection)])
-    (let* ([result (query-row conn "SELECT * FROM person WHERE id = ?" id)])
-      (disconnect conn)
-      (if result
-          (apply make-person result)
-          #f))))
+  (let* ([conn (get-connection)]
+         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
+    (disconnect conn)
+    (and result (row->person-struct result))))
 
 (define (person-read-all)
-  (let ([conn (get-connection)])
-    (let* ([result (query-rows conn "SELECT * FROM person")])
-      (disconnect conn)
-      (map (lambda (row) (apply make-person row)) result))))
+  (let* ([conn (get-connection)]
+         [result (query-rows conn select-cols)])
+    (disconnect conn)
+    (map row->person-struct result)))
 
-(define (person-update id first-name last-name phone-number date-of-birth english-proficiency email-address gender race address-id place-of-birth-id)
+(define (person-update id address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
   (let ([conn (get-connection)])
-    (query-exec
-     conn
-     "UPDATE person SET first_name = ?, last_name = ?, phone_number = ?, date_of_birth = ?, english_proficiency = ?, email_address = ?, gender = ?, race = ?, address_id = ?, place_of_birth_id = ?, version = version + 1 WHERE id = ?"
-     first-name last-name phone-number date-of-birth english-proficiency email-address gender race address-id place-of-birth-id id)
-    (disconnect conn)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "UPDATE `person` SET `address_id` = ?, `english_proficiency` = ?, `first_name` = ?, `last_name` = ?, `gender` = ?, `email_address` = ?, `date_of_birth` = ?, `phone_number` = ?, `place_of_birth_id` = ?, `race` = ?, `version` = `version` + 1 WHERE `id` = ?"
+                    address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race id))
+      (lambda () (disconnect conn)))))
 
 (define (person-delete id)
   (let ([conn (get-connection)])
-    (query-exec conn "DELETE FROM person WHERE id = ?" id)
-    (disconnect conn)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "DELETE FROM `person` WHERE `id` = ?" id))
+      (lambda () (disconnect conn)))))

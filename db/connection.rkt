@@ -1,11 +1,12 @@
 #lang racket
 
-(require db)
 (provide get-connection)
 
+(require db/mysql)
+
 (define (get-connection)
-  (mysql-connect #:server "localhost"
-                 #:port 3306
-                 #:user "ilcdb_user"
+  (mysql-connect #:user "ilcdb_user"
                  #:password "ilcdb_password"
-                 #:database "ilcdb"))
+                 #:database "ilcdb"
+                 #:server "127.0.0.1"
+                 #:port 3306))

@@ -1,47 +1,64 @@
 #lang racket
 
-(require db
-         db/base
-         "../models/address.rkt"
-         "connection.rkt")
-
 (provide address-create
          address-read
          address-read-all
          address-update
          address-delete)
 
+(require db
+         db/base
+         "../models/address.rkt"
+         "connection.rkt")
+
+(define select-cols "SELECT `id`, `version`, `street`, `city`, `county`, `state`, `postal_code`, `country_id`, `person_id` FROM `address`")
+
+(define (row->address-struct row)
+  (make-address (vector-ref row 0)
+                (vector-ref row 1)
+                (vector-ref row 2)
+                (vector-ref row 3)
+                (vector-ref row 4)
+                (vector-ref row 5)
+                (vector-ref row 6)
+                (vector-ref row 7)
+                (vector-ref row 8)))
+
 (define (address-create street city county state postal-code country-id person-id)
   (let ([conn (get-connection)])
-    (query-exec
-     conn
-     "INSERT INTO address (version, street, city, county, state, postal_code, country_id, person_id) VALUES (0, ?, ?, ?, ?, ?, ?, ?)"
-     street city county state postal-code country-id person-id)
-    (let ([result (query-value conn "SELECT LAST_INSERT_ID()")])
-      (disconnect conn)
-      result)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "INSERT INTO `address` (`version`, `street`, `city`, `county`, `state`, `postal_code`, `country_id`, `person_id`) VALUES (0, ?, ?, ?, ?, ?, ?, ?)"
+                    street city county state postal-code country-id person-id)
+        (query-value conn "SELECT LAST_INSERT_ID()"))
+      (lambda () (disconnect conn)))))
 
 (define (address-read id)
-  (let ([conn (get-connection)])
-    (let ([result (query-row conn "SELECT * FROM address WHERE id = ?" id)])
-      (disconnect conn)
-      (apply make-address result))))
+  (let* ([conn (get-connection)]
+         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
+    (disconnect conn)
+    (and result (row->address-struct result))))
 
 (define (address-read-all)
-  (let ([conn (get-connection)])
-    (let* ([result (query-rows conn "SELECT * FROM address")])
-      (disconnect conn)
-      (map (lambda (row) (apply make-address row)) result))))
+  (let* ([conn (get-connection)]
+         [result (query-rows conn select-cols)])
+    (disconnect conn)
+    (map row->address-struct result)))
 
-(define (address-update id street city county state postal-code country-id)
+(define (address-update id street city county state postal-code country-id person-id)
   (let ([conn (get-connection)])
-    (query-exec
-     conn
-     "UPDATE address SET street = ?, city = ?, county = ?, state = ?, postal_code = ?, country_id = ?, version = version + 1 WHERE id = ?"
-     street city county state postal-code country-id id)
-    (disconnect conn)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "UPDATE `address` SET `street` = ?, `city` = ?, `county` = ?, `state` = ?, `postal_code` = ?, `country_id` = ?, `person_id` = ?, `version` = `version` + 1 WHERE `id` = ?"
+                    street city county state postal-code country-id person-id id))
+      (lambda () (disconnect conn)))))
 
 (define (address-delete id)
   (let ([conn (get-connection)])
-    (query-exec conn "DELETE FROM address WHERE id = ?" id)
-    (disconnect conn)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "DELETE FROM `address` WHERE `id` = ?" id))
+      (lambda () (disconnect conn)))))

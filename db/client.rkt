@@ -1,17 +1,65 @@
 #lang racket
 
+(provide client-create
+         client-read
+         client-read-all
+         client-update
+         client-delete)
+
 (require db
+         db/base
+         gregor
          "../models/client.rkt"
          "connection.rkt")
 
-(provide client-create)
+(define select-cols "SELECT `id`, `version`, `client_id`, `first_visit`, `first_visit_string`, `household_income_level`, `number_in_household`, `file_location`, `ami_id` FROM `client`")
+
+(define (row->client-struct row)
+  (make-client (vector-ref row 0)
+               (vector-ref row 1)
+               (vector-ref row 2)
+               (vector-ref row 3)
+               (vector-ref row 4)
+               (vector-ref row 5)
+               (vector-ref row 6)
+               (vector-ref row 7)
+               (vector-ref row 8)))
 
 (define (client-create person-id first-visit household-income-level number-in-household file-location ami-id)
   (let ([conn (get-connection)])
-    (query-exec
-     conn
-     "INSERT INTO `client` (`version`, `client_id`, `first_visit`, `household_income_level`, `number_in_household`, `file_location`, `ami_id`) VALUES (0, ?, ?, ?, ?, ?, ?)"
-     person-id first-visit household-income-level number-in-household file-location ami-id)
-    (let ([result (query-value conn "SELECT LAST_INSERT_ID()")])
-      (disconnect conn)
-      result)))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "INSERT INTO `client` (`version`, `client_id`, `first_visit`, `household_income_level`, `number_in_household`, `file_location`, `ami_id`) VALUES (0, ?, ?, ?, ?, ?, ?)"
+                    person-id (and first-visit (datetime->iso8601 first-visit)) household-income-level number-in-household file-location ami-id)
+        (query-value conn "SELECT LAST_INSERT_ID()"))
+      (lambda () (disconnect conn)))))
+
+(define (client-read id)
+  (let* ([conn (get-connection)]
+         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
+    (disconnect conn)
+    (and result (row->client-struct result))))
+
+(define (client-read-all)
+  (let* ([conn (get-connection)]
+         [result (query-rows conn select-cols)])
+    (disconnect conn)
+    (map row->client-struct result)))
+
+(define (client-update id person-id first-visit household-income-level number-in-household file-location ami-id)
+  (let ([conn (get-connection)])
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "UPDATE `client` SET `client_id` = ?, `first_visit` = ?, `household_income_level` = ?, `number_in_household` = ?, `file_location` = ?, `ami_id` = ?, `version` = `version` + 1 WHERE `id` = ?"
+                    person-id (and first-visit (datetime->iso8601 first-visit)) household-income-level number-in-household file-location ami-id id))
+      (lambda () (disconnect conn)))))
+
+(define (client-delete id)
+  (let ([conn (get-connection)])
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (query-exec conn "DELETE FROM `client` WHERE `id` = ?" id))
+      (lambda () (disconnect conn)))))

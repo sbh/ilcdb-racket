@@ -3,157 +3,134 @@
 (require rackunit
          rackunit/text-ui
          net/http-client
+         web-server/http
          racket/bytes
          json
-         db
-         db/base
+         gregor
          "../main.rkt"
-         "../utils.rkt"
-         "../db/country.rkt"
-         "../db/address.rkt"
-         "../db/birth-place.rkt")
+         "../utils.rkt")
 
-(define country-id #f)
-(define birth-place-id #f)
-(define address-id #f)
-(define person-id #f)
+(define (create-test-country)
+  (define-values (s h i) (http-sendrecv "localhost" "/api/country" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'name "Testland"))))
+  (hash-ref (bytes->jsexpr (port->bytes i)) 'id))
+
+(define (delete-test-country id)
+  (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080 #:method "DELETE"))
+
+(define (create-test-ami)
+  (define-values (s h i) (http-sendrecv "localhost" "/api/ami" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'label "Test AMI" 'level 1))))
+  (hash-ref (bytes->jsexpr (port->bytes i)) 'id))
+
+(define (delete-test-ami id)
+  (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080 #:method "DELETE"))
 
 (test-suite
- "ILCDB API Integration Tests"
+ "ILCDB Full API Integration Tests"
 
  (with-handlers ([exn:fail? (lambda (ex) (stop-from-background) (raise ex))])
    (start-in-background)
-   (sleep 2) ; Give the server a moment to start
+   (sleep 2)
 
-   ;; Country API Tests
    (test-suite
-    "Country API"
-    (test-case
-     "POST /api/country"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" "/api/country"
-                      #:port 8080
-                      #:method "POST"
-                      #:data (jsexpr->string (hasheq 'name "USA"))))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (set! country-id (hash-ref json-response 'id)))
+    "Country API Lifecycle"
+    (let ([id #f])
+      (test-case "POST"
+                 (define-values (s h i) (http-sendrecv "localhost" "/api/country" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'name "Testlandia"))))
+                 (check-equal? (bytes->string/utf-8 s) "200 OK")
+                 (set! id (hash-ref (bytes->jsexpr (port->bytes i)) 'id)))
+      (test-case "GET /:id"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080))
+                 (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'name) "Testlandia"))
+      (test-case "GET /"
+                 (define-values (s h i) (http-sendrecv "localhost" "/api/country" #:port 8080))
+                 (check-true (list? (bytes->jsexpr (port->bytes i)))))
+      (test-case "PUT"
+                 (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080 #:method "PUT" #:data (jsexpr->bytes (hasheq 'name "New Testlandia"))))
+      (test-case "GET /:id (verify PUT)"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080))
+                 (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'name) "New Testlandia"))
+      (test-case "DELETE"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080 #:method "DELETE"))
+                 (check-equal? (bytes->string/utf-8 s) "200 OK"))
+      (test-case "GET /:id (verify DELETE)"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080))
+                 (check-pred (lambda(b) (bytes-prefix? b #"404")) s))))
 
-    (test-case
-     "GET /api/country/:id"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/country/" (number->string country-id)) #:port 8080))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (check-equal? (hash-ref json-response 'name) "USA")))
-
-   ;; Birth Place API Tests
    (test-suite
-    "Birth Place API"
-    (test-case
-     "POST /api/birth-place"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" "/api/birth-place"
-                      #:port 8080
-                      #:method "POST"
-                      #:data (jsexpr->string
-                              (hasheq 'city "New York"
-                                      'state "NY"
-                                      'country-id country-id))))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (set! birth-place-id (hash-ref json-response 'id))))
+    "AMI API Lifecycle"
+    (let ([id #f])
+      (test-case "POST"
+                 (define-values (s h i) (http-sendrecv "localhost" "/api/ami" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'label "100% AMI" 'level 5))))
+                 (check-equal? (bytes->string/utf-8 s) "200 OK")
+                 (set! id (hash-ref (bytes->jsexpr (port->bytes i)) 'id)))
+      (test-case "GET /:id"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080))
+                 (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'level) 5))
+       (test-case "GET /"
+                 (define-values (s h i) (http-sendrecv "localhost" "/api/ami" #:port 8080))
+                 (check-true (list? (bytes->jsexpr (port->bytes i)))))
+      (test-case "PUT"
+                 (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080 #:method "PUT" #:data (jsexpr->bytes (hasheq 'label "120% AMI" 'level 6))))
+      (test-case "GET /:id (verify PUT)"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080))
+                 (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'level) 6))
+      (test-case "DELETE"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080 #:method "DELETE"))
+                 (check-equal? (bytes->string/utf-8 s) "200 OK"))
+      (test-case "GET /:id (verify DELETE)"
+                 (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080))
+                 (check-pred (lambda(b) (bytes-prefix? b #"404")) s))))
 
-   ;; Address API Tests
    (test-suite
-    "Address API"
-    (test-case
-     "POST /api/address"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" "/api/address"
-                      #:port 8080
-                      #:method "POST"
-                      #:data (jsexpr->string
-                              (hasheq 'street "123 Main St"
-                                      'city "Anytown"
-                                      'state "Anystate"
-                                      'postal-code "12345"
-                                      'country-id country-id))))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (set! address-id (hash-ref json-response 'id))))
+    "Full Dependent Lifecycle (Birth Place, Address, Person, Client)"
+    (let ([country-id #f] [ami-id #f] [birth-place-id #f] [address-id #f] [person-id #f] [client-id #f])
+      (dynamic-wind
+        (lambda () (set! country-id (create-test-country)) (set! ami-id (create-test-ami)))
+        (lambda ()
+          (test-suite
+           "Dependent Creation"
+           (test-case "POST birth-place" (set! birth-place-id (hash-ref (bytes->jsexpr (port->bytes (caddr (http-sendrecv "localhost" "/api/birth-place" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'city "Testville" 'state "TS" 'country-id country-id)))))) 'id)))
+           (test-case "POST address" (set! address-id (hash-ref (bytes->jsexpr (port->bytes (caddr (http-sendrecv "localhost" "/api/address" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'street "123 Test St" 'city "Testopolis" 'county "Testshire" 'state "TS" 'postal-code "12345" 'country-id country-id)))))) 'id)))
+           (test-case "POST person" (set! person-id (hash-ref (bytes->jsexpr (port->bytes (caddr (http-sendrecv "localhost" "/api/person" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'first-name "John" 'last-name "Tester" 'address-id address-id 'place-of-birth-id birth-place-id)))))) 'id)))
+           (test-case "POST client"
+                      (define-values (s h i) (http-sendrecv "localhost" "/api/client" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'client-id person-id 'ami-id ami-id 'household-income-level 50000))))
+                      (check-equal? (bytes->string/utf-8 s) "200 OK")
+                      (set! client-id (hash-ref (bytes->jsexpr (port->bytes i)) 'id)))
+           (test-case "GET client"
+                      (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/client/" (number->string client-id)) #:port 8080))
+                      (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'household-income-level) 50000))
+           (test-case "PUT client"
+                      (http-sendrecv "localhost" (string-append "/api/client/" (number->string client-id)) #:port 8080 #:method "PUT" #:data (jsexpr->bytes (hasheq 'client-id person-id 'ami-id ami-id 'household-income-level 60000))))
+           (test-case "GET client (verify PUT)"
+                      (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/client/" (number->string client-id)) #:port 8080))
+                      (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'household-income-level) 60000))))
+        (lambda ()
+          (http-sendrecv "localhost" (string-append "/api/client/" (number->string client-id)) #:port 8080 #:method "DELETE")
+          (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id)) #:port 8080 #:method "DELETE")
+          (http-sendrecv "localhost" (string-append "/api/address/" (number->string address-id)) #:port 8080 #:method "DELETE")
+          (http-sendrecv "localhost" (string-append "/api/birth-place/" (number->string birth-place-id)) #:port 8080 #:method "DELETE")
+          (delete-test-country country-id)
+          (delete-test-ami ami-id)))))
 
-   ;; Person API Tests
    (test-suite
-    "Person API"
+    "Page Rendering"
     (test-case
-     "POST /api/person"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" "/api/person"
-                      #:port 8080
-                      #:method "POST"
-                      #:data (jsexpr->string
-                              (hasheq 'first-name "John"
-                                      'last-name "Doe"
-                                      'phone-number "555-1234"
-                                      'date-of-birth "1990-01-01T00:00:00"
-                                      'english-proficiency "native"
-                                      'email-address "john.doe@example.com"
-                                      'gender "male"
-                                      'race "White"
-                                      'address-id address-id
-                                      'place-of-birth-id birth-place-id))))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (set! person-id (hash-ref json-response 'id)))
-
+     "GET / (Home Page)"
+     (define-values (s h i) (http-sendrecv "localhost" "/" #:port 8080))
+     (check-equal? (bytes->string/utf-8 s) "200 OK")
+     (define content-type (headers-assq* #"Content-Type" h))
+     (check-true (bytes-prefix? (header-value content-type) #"text/html"))
+     (define body (port->bytes i))
+     (check-true (bytes-contains? body #"Welcome to ILCDB")))
     (test-case
-     "GET /api/person/:id"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id)) #:port 8080))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (check-equal? (hash-ref json-response 'first-name) "John"))
-
-    (test-case
-     "PUT /api/person/:id"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id))
-                      #:port 8080
-                      #:method "PUT"
-                      #:data (jsexpr->string
-                              (hasheq 'first-name "Jane"
-                                      'last-name "Doe"
-                                      'phone-number "555-5678"
-                                      'date-of-birth "1990-01-01T00:00:00"
-                                      'english-proficiency "high"
-                                      'email-address "jane.doe@example.com"
-                                      'gender "female"
-                                      'race "White"
-                                      'address-id address-id
-                                      'place-of-birth-id birth-place-id))))
-     (check-equal? (bytes->string/utf-8 status) "200 OK"))
-
-    (test-case
-     "GET /api/person/:id (verify update)"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id)) #:port 8080))
-     (check-equal? (bytes->string/utf-8 status) "200 OK")
-     (define json-response (bytes->jsexpr (port->bytes in)))
-     (check-equal? (hash-ref json-response 'first-name) "Jane"))
-
-    (test-case
-     "DELETE /api/person/:id"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id))
-                      #:port 8080
-                      #:method "DELETE"))
-     (check-equal? (bytes->string/utf-8 status) "200 OK"))
-
-    (test-case
-     "GET /api/person/:id (verify delete)"
-     (define-values (status headers in)
-       (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id)) #:port 8080))
-     (check-pred (lambda (s) (bytes-prefix? s #"404")) status)))
+     "GET /clients (Client List Page)"
+     (define-values (s h i) (http-sendrecv "localhost" "/clients" #:port 8080))
+     (check-equal? (bytes->string/utf-8 s) "200 OK")
+     (define content-type (headers-assq* #"Content-Type" h))
+     (check-true (bytes-prefix? (header-value content-type) #"text/html"))
+     (define body (port->bytes i))
+     (check-true (bytes-contains? body #"All Clients"))
+     (check-true (bytes-contains? body #"John"))
+     (check-true (bytes-contains? body #"Tester"))))
 
    (stop-from-background)))

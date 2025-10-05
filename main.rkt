@@ -8,19 +8,22 @@
          "api/person.rkt"
          "api/country.rkt"
          "api/birth-place.rkt"
-         "api/address.rkt")
+         "api/address.rkt"
+         "api/ami.rkt"
+         "api/client.rkt"
+         "pages/main.rkt")
 
 (define shutdown-server #f)
 
-;; The sequencer:make function expects dispatchers that take two arguments
-;; (connection and request), but our API dispatchers only take one (request).
-;; We wrap each in a lambda to adapt the signature.
 (define main-dispatcher
   (sequencer:make
    (lambda (conn req) (person-api-dispatcher req))
    (lambda (conn req) (country-api-dispatcher req))
    (lambda (conn req) (birth-place-api-dispatcher req))
-   (lambda (conn req) (address-api-dispatcher req))))
+   (lambda (conn req) (address-api-dispatcher req))
+   (lambda (conn req) (ami-api-dispatcher req))
+   (lambda (conn req) (client-api-dispatcher req))
+   (lambda (conn req) (page-dispatcher req))))
 
 (define (start-in-background)
   (set! shutdown-server

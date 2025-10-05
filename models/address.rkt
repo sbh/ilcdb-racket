@@ -4,25 +4,25 @@
          address?
          address-id
          address-version
+         address-street
          address-city
          address-county
-         address-person-id
-         address-postal-code
          address-state
-         address-street
+         address-postal-code
          address-country-id
+         address-person-id
          address->jsexpr)
 
 (define-struct address
   (id
    version
+   street
    city
    county
-   person-id
-   postal-code
    state
-   street
-   country-id))
+   postal-code
+   country-id
+   person-id))
 
 (define (address->jsexpr a)
   (hasheq 'id (address-id a)

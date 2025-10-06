@@ -111,7 +111,7 @@
           (http-sendrecv "localhost" (string-append "/api/birth-place/" (number->string birth-place-id)) #:port 8080 #:method "DELETE")
           (delete-test-country country-id)
           (delete-test-ami ami-id)))))
-
+   
    (test-suite
     "Page Rendering"
     (test-case

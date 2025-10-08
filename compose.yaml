@@ -1,0 +1,27 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: ilcdb-db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: ilcdb
+      MYSQL_USER: ilcdb_user
+      MYSQL_PASSWORD: ilcdb_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./ilcdb.schema.sql:/docker-entrypoint-initdb.d/1-schema.sql
+      - db_data:/var/lib/mysql
+
+  app:
+    build: .
+    container_name: ilcdb-app
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+volumes:
+  db_data:

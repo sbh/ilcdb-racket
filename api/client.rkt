@@ -40,7 +40,7 @@
 
 (define (post-client request)
   (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
-         [person-id (hash-ref json-body 'client-id)] ; maps to person.id
+         [person-id (hash-ref json-body 'person-id)]
          [first-visit (hash-ref json-body 'first-visit #f)]
          [household-income-level (hash-ref json-body 'household-income-level #f)]
          [number-in-household (hash-ref json-body 'number-in-household #f)]
@@ -52,7 +52,7 @@
 (define (put-client request id-str)
   (let* ([id (string->number id-str)]
          [json-body (bytes->jsexpr (request-post-data/raw request))]
-         [person-id (hash-ref json-body 'client-id)]
+         [person-id (hash-ref json-body 'person-id)]
          [first-visit (hash-ref json-body 'first-visit #f)]
          [household-income-level (hash-ref json-body 'household-income-level #f)]
          [number-in-household (hash-ref json-body 'number-in-household #f)]

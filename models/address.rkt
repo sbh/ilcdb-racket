@@ -9,9 +9,11 @@
          address-county
          address-state
          address-postal-code
-         address-country-id
+         address-country
          address-person-id
          address->jsexpr)
+
+(require "./country.rkt")
 
 (define-struct address
   (id
@@ -21,8 +23,8 @@
    county
    state
    postal-code
-   country-id
-   person-id))
+   country
+   person-id)) ; person-id is kept as an ID to break circular dependency
 
 (define (address->jsexpr a)
   (hasheq 'id (address-id a)
@@ -32,5 +34,5 @@
           'county (address-county a)
           'state (address-state a)
           'postal-code (address-postal-code a)
-          'country-id (address-country-id a)
+          'country (country->jsexpr (address-country a))
           'person-id (address-person-id a)))

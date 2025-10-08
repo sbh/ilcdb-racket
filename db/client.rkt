@@ -10,20 +10,24 @@
          db/base
          gregor
          "../models/client.rkt"
+         "./person.rkt"
+         "./ami.rkt"
          "connection.rkt")
 
 (define select-cols "SELECT `id`, `version`, `client_id`, `first_visit`, `first_visit_string`, `household_income_level`, `number_in_household`, `file_location`, `ami_id` FROM `client`")
 
 (define (row->client-struct row)
-  (make-client (vector-ref row 0)
-               (vector-ref row 1)
-               (vector-ref row 2)
-               (vector-ref row 3)
-               (vector-ref row 4)
-               (vector-ref row 5)
-               (vector-ref row 6)
-               (vector-ref row 7)
-               (vector-ref row 8)))
+  (let ([person-id (vector-ref row 2)]
+        [ami-id (vector-ref row 8)])
+    (make-client (vector-ref row 0)    ; id
+                 (vector-ref row 1)    ; version
+                 (person-read person-id) ; person object
+                 (vector-ref row 3)    ; first_visit
+                 (vector-ref row 4)    ; first_visit_string
+                 (vector-ref row 5)    ; household_income_level
+                 (vector-ref row 6)    ; number_in_household
+                 (vector-ref row 7)    ; file_location
+                 (ami-read ami-id))))    ; ami object
 
 (define (client-create person-id first-visit household-income-level number-in-household file-location ami-id)
   (let ([conn (get-connection)])

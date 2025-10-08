@@ -9,20 +9,22 @@
 (require db
          db/base
          "../models/address.rkt"
+         "./country.rkt"
          "connection.rkt")
 
 (define select-cols "SELECT `id`, `version`, `street`, `city`, `county`, `state`, `postal_code`, `country_id`, `person_id` FROM `address`")
 
 (define (row->address-struct row)
-  (make-address (vector-ref row 0)
-                (vector-ref row 1)
-                (vector-ref row 2)
-                (vector-ref row 3)
-                (vector-ref row 4)
-                (vector-ref row 5)
-                (vector-ref row 6)
-                (vector-ref row 7)
-                (vector-ref row 8)))
+  (let ([country-id (vector-ref row 7)])
+    (make-address (vector-ref row 0) ; id
+                  (vector-ref row 1) ; version
+                  (vector-ref row 2) ; street
+                  (vector-ref row 3) ; city
+                  (vector-ref row 4) ; county
+                  (vector-ref row 5) ; state
+                  (vector-ref row 6) ; postal_code
+                  (country-read country-id) ; nested country struct
+                  (vector-ref row 8)))) ; person_id (as ID)
 
 (define (address-create street city county state postal-code country-id person-id)
   (let ([conn (get-connection)])

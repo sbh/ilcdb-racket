@@ -8,14 +8,16 @@
 
 (require db
          "../models/birth-place.rkt"
+         "./country.rkt"
          "connection.rkt")
 
 (define (row->birth-place-struct row)
-  (make-birth-place (vector-ref row 0)
-                    (vector-ref row 1)
-                    (vector-ref row 2)
-                    (vector-ref row 3)
-                    (vector-ref row 4)))
+  (let ([country-id (vector-ref row 4)])
+    (make-birth-place (vector-ref row 0)    ; id
+                      (vector-ref row 1)    ; version
+                      (vector-ref row 2)    ; city
+                      (vector-ref row 3)    ; state
+                      (country-read country-id)))) ; country struct
 
 (define (birth-place-create city state country-id)
   (let ([conn (get-connection)])

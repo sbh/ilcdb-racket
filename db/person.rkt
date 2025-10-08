@@ -9,23 +9,27 @@
 (require db
          db/base
          "../models/person.rkt"
+         "./address.rkt"
+         "./birth-place.rkt"
          "connection.rkt")
 
 (define select-cols "SELECT `id`, `version`, `address_id`, `english_proficiency`, `first_name`, `last_name`, `gender`, `email_address`, `date_of_birth`, `phone_number`, `place_of_birth_id`, `race` FROM `person`")
 
 (define (row->person-struct row)
-  (make-person (vector-ref row 0)
-               (vector-ref row 1)
-               (vector-ref row 2)
-               (vector-ref row 3)
-               (vector-ref row 4)
-               (vector-ref row 5)
-               (vector-ref row 6)
-               (vector-ref row 7)
-               (vector-ref row 8)
-               (vector-ref row 9)
-               (vector-ref row 10)
-               (vector-ref row 11)))
+  (let ([address-id (vector-ref row 2)]
+        [place-of-birth-id (vector-ref row 10)])
+    (make-person (vector-ref row 0)    ; id
+                 (vector-ref row 1)    ; version
+                 (address-read address-id) ; address
+                 (vector-ref row 3)    ; english_proficiency
+                 (vector-ref row 4)    ; first_name
+                 (vector-ref row 5)    ; last_name
+                 (vector-ref row 6)    ; gender
+                 (vector-ref row 7)    ; email_address
+                 (vector-ref row 8)    ; date_of_birth
+                 (vector-ref row 9)    ; phone_number
+                 (and place-of-birth-id (birth-place-read place-of-birth-id)) ; place_of_birth
+                 (vector-ref row 11)))) ; race
 
 (define (person-create address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
   (let ([conn (get-connection)])

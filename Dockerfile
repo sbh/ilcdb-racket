@@ -5,7 +5,7 @@ FROM racket/racket:latest
 WORKDIR /app
 
 # Copy the Racket application code into the container
-COPY ./ilcdb-racket /app/ilcdb-racket
+COPY . /app/ilcdb-racket
 COPY ./ilcdb.schema.sql /app/ilcdb.schema.sql
 
 # Racket's package manager uses this directory
@@ -15,4 +15,4 @@ RUN mkdir -p /root/.local/share/racket
 EXPOSE 8080
 
 # The command to run when the container starts
-CMD ["racket", "ilcdb-racket/main.rkt"]
+CMD ["racket", "./main.rkt"]

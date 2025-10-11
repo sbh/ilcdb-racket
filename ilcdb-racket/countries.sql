@@ -1,0 +1,10 @@
+INSERT INTO `country` (version, name) VALUES (0, 'United States');
+INSERT INTO `country` (version, name) VALUES (0, 'Mexico');
+INSERT INTO `country` (version, name) VALUES (0, 'Canada');
+INSERT INTO `country` (version, name) VALUES (0, 'Guatemala');
+INSERT INTO `country` (version, name) VALUES (0, 'El Salvador');
+INSERT INTO `country` (version, name) VALUES (0, 'Honduras');
+INSERT INTO `country` (version, name) VALUES (0, 'Nicaragua');
+INSERT INTO `country` (version, name) VALUES (0, 'Brazil');
+INSERT INTO `country` (version, name) VALUES (0, 'Colombia');
+INSERT INTO `country` (version, name) VALUES (0, 'Venezuela');

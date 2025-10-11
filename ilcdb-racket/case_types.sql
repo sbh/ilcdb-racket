@@ -1,0 +1,16 @@
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Adjustment of Status', 'LPR');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Affirmative Asylum', 'Asylee');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Consular Processing', 'Immigrant Visa');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'DACA', 'DACA');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Naturalization', 'US Citizen');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'U-Visa', 'U-Visa');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'T-Visa', 'T-Visa');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'VAWA', 'VAWA');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'SIJS', 'SIJS');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'TPS', 'TPS');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'NACARA', 'NACARA');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Renewal of LPR Card', 'LPR');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'FOIA', 'None');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Work Permit', 'None');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Travel Document', 'None');
+INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Other', 'None');

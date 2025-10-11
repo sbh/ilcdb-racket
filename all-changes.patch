@@ -1,0 +1,1755 @@
+diff --git a/Dockerfile b/Dockerfile
+index 1006b47..160a590 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,27 +1,17 @@
+-    # Use the official Tomcat base image
+-    FROM tomcat:9-jdk8
++# Use the official Racket image as a base
++FROM racket/racket:latest
+ 
+-    RUN apt-get update && apt-get install -y less vim default-mysql-client unzip
++# Set the working directory
++WORKDIR /app
+ 
+-    # Remove the default web apps
+-    RUN rm -rf /usr/local/tomcat/webapps/*
++# Install Racket packages
++RUN raco pkg install mysql gregor
+ 
+-    # Install Grails 2.5
+-    ENV GRAILS_VERSION=2.5.6
+-    RUN wget https://github.com/grails/grails-core/releases/download/v${GRAILS_VERSION}/grails-${GRAILS_VERSION}.zip && \
+-     unzip grails-${GRAILS_VERSION}.zip && \
+-     rm grails-${GRAILS_VERSION}.zip && \
+-     mv grails-${GRAILS_VERSION} /grails
++# Copy the application source code
++COPY ./ilcdb-racket/ /app/
+ 
+-    ENV GRAILS_HOME=/grails
+-    ENV PATH=$GRAILS_HOME/bin:$PATH
++# Expose the port the app runs on
++EXPOSE 8080
+ 
+-    # Copy the WAR file into the Tomcat webapps directory
+-    COPY target/ilcdb-1.0.war /usr/local/tomcat/webapps/
+-
+-
+-    # Expose the port Tomcat is running on
+-    EXPOSE 8080
+-
+-    # Start Tomcat
+-    CMD ["catalina.sh", "run"]
++# Command to run the application
++CMD ["racket", "main.rkt"]
+\ No newline at end of file
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..40628c1
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,52 @@
++# ILCDB Racket/HTMX Rewrite
++
++This project is a rewrite of the ILCDB web application using Racket for the backend and HTMX for the frontend. The application is containerized using Podman for easy deployment and development.
++
++## Prerequisites
++
++- [Podman](https://podman.io/getting-started/installation)
++- [podman-compose](https://github.com/containers/podman-compose)
++
++## Building and Running the Application
++
++1.  **Start the services:**
++
++    ```bash
++    podman-compose up --build
++    ```
++
++    This command will:
++    - Build the Docker image for the Racket application.
++    - Start the `app` and `db` services.
++    - On the first run, the `db` service will be initialized with the schema from `ilcdb.schema.sql`.
++
++2.  **Access the application:**
++    - Web interface: [http://localhost:8080](http://localhost:8080)
++    - API endpoint example: `curl http://localhost:8080/api/person`
++
++## Populating the Database with Test Data
++
++A script is provided to populate the database with a large set of realistic test data.
++
++1.  **Ensure the application is running:**
++
++    ```bash
++    podman-compose up
++    ```
++
++2.  **Run the data generation script inside the container:**
++
++    ```bash
++    podman exec -it ilcdb-app racket generate-test-data.rkt
++    ```
++    This command executes the data generation script within the running `app` container, connecting to the `db` container to populate the database.
++
++## Stopping the Application
++
++To stop the services and remove the containers, run:
++
++```bash
++podman-compose down
++```
++
++This will stop the application and database containers. The database data will be preserved in a Podman volume. To remove the volume, run `podman volume rm ilcdb-data`.
+\ No newline at end of file
+diff --git a/compose.yaml b/compose.yaml
+index 39f9673..889e989 100644
+--- a/compose.yaml
++++ b/compose.yaml
+@@ -1,43 +1,33 @@
+-name: ilcdb
+-
+ services:
+-  webapp:
+-    build: .
+-    container_name: ilcdb-webapp
+-    image: sbherndon/ilcdb-webapp:latest
+-#    image: ilcdb-webapp:latest
+-    ports:
+-      - "8080:8080"
+-#    depends_on:
+-#      db:
+-#        condition: service_healthy
+-    environment:
+-      - MYSQL_HOST=db
+-      - MYSQL_PORT=3306
+-      - MYSQL_DATABASE=ilcdb
+-      - MYSQL_USER=$MYSQL_USER
+-      - MYSQL_USER_PASSWORD=$MYSQL_USER_PASSWORD
+-
+   db:
+-    image: mysql:9
+-    container_name: ilcdb-mysql
++    image: mysql:8.0
++    container_name: ilcdb-db
++    environment:
++      MYSQL_DATABASE: ilcdb
++      MYSQL_USER: ilcdb_user
++      MYSQL_PASSWORD: ilcdb_password
++      MYSQL_ROOT_PASSWORD: root_password
+     ports:
+       - "3306:3306"
+-    environment:
+-      - MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
+-      - MYSQL_DATABASE=ilcdb
+-      - MYSQL_USER=$MYSQL_USER
+-      - MYSQL_USER_PASSWORD=$MYSQL_USER_PASSWORD
+     volumes:
+-      - mysql_data:/var/lib/mysql
++      - ilcdb-data:/var/lib/mysql
++      - ./ilcdb.schema.sql:/docker-entrypoint-initdb.d/init.sql
+     healthcheck:
+-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
++      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
++      interval: 10s
+       timeout: 5s
+-      retries: 2
++      retries: 5
+ 
+-volumes:
+-  mysql_data:  # This line defines the volume
++  app:
++    build: .
++    container_name: ilcdb-app
++    ports:
++      - "8080:8080"
++    depends_on:
++      db:
++        condition: service_healthy
++    environment:
++      - DB_HOST=db
+ 
+-# secrets:
+-#   mysql_user_password: ./secrets/mysql_ilcdb_password.txt
+-#   mysql_root_password: ./secrets/mysql_root_password.txt
++volumes:
++  ilcdb-data:
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/address.rkt b/ilcdb-racket/api/address.rkt
+new file mode 100644
+index 0000000..1120ca0
+--- /dev/null
++++ b/ilcdb-racket/api/address.rkt
+@@ -0,0 +1,69 @@
++#lang racket
++
++(provide address-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         json
++         db/base
++         "../db/address.rkt"
++         "../models/address.rkt")
++
++(define-values (address-api-dispatcher _)
++  (dispatch-rules
++   [("api" "address")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-addresses req)]
++        ["POST" (post-address req)]))]
++   [("api" "address" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-address req id)]
++        ["PUT" (put-address req id)]
++        ["DELETE" (delete-address req id)]))]))
++
++(define (get-all-addresses request)
++  (let ([addresses (address-read-all)])
++    (response/jsexpr (map address->jsexpr addresses))))
++
++(define (get-address request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([a (address-read id)])
++        (if a
++            (response/jsexpr (address->jsexpr a))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-address request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [street (hash-ref json-body 'street)]
++         [city (hash-ref json-body 'city)]
++         [county (hash-ref json-body 'county #f)]
++         [state (hash-ref json-body 'state)]
++         [postal-code (hash-ref json-body 'postal-code)]
++         [country-id (hash-ref json-body 'country-id)]
++         [person-id (hash-ref json-body 'person-id #f)])
++    (let ([new-id (address-create street city county state postal-code country-id (if person-id person-id sql-null))])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-address request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [street (hash-ref json-body 'street)]
++         [city (hash-ref json-body 'city)]
++         [county (hash-ref json-body 'county #f)]
++         [state (hash-ref json-body 'state)]
++         [postal-code (hash-ref json-body 'postal-code)]
++         [country-id (hash-ref json-body 'country-id)]
++         [person-id (hash-ref json-body 'person-id #f)])
++    (address-update id street city county state postal-code country-id (if person-id person-id sql-null))
++    (response/full 200 #"OK")))
++
++(define (delete-address request id-str)
++  (let ([id (string->number id-str)])
++    (address-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/ami.rkt b/ilcdb-racket/api/ami.rkt
+new file mode 100644
+index 0000000..843b20f
+--- /dev/null
++++ b/ilcdb-racket/api/ami.rkt
+@@ -0,0 +1,58 @@
++#lang racket
++
++(provide ami-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         json
++         "../db/ami.rkt"
++         "../models/ami.rkt")
++
++(define-values (ami-api-dispatcher _)
++  (dispatch-rules
++   [("api" "ami")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-amis req)]
++        ["POST" (post-ami req)]))]
++   [("api" "ami" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-ami req id)]
++        ["PUT" (put-ami req id)]
++        ["DELETE" (delete-ami req id)]))]))
++
++(define (get-all-amis request)
++  (let ([amis (ami-read-all)])
++    (response/jsexpr (map ami->jsexpr amis))))
++
++(define (get-ami request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([a (ami-read id)])
++        (if a
++            (response/jsexpr (ami->jsexpr a))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-ami request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [label (hash-ref json-body 'label)]
++         [level (hash-ref json-body 'level)])
++    (let ([new-id (ami-create label level)])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-ami request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [label (hash-ref json-body 'label)]
++         [level (hash-ref json-body 'level)])
++    (ami-update id label level)
++    (response/full 200 #"OK")))
++
++(define (delete-ami request id-str)
++  (let ([id (string->number id-str)])
++    (ami-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/birth-place.rkt b/ilcdb-racket/api/birth-place.rkt
+new file mode 100644
+index 0000000..8e231a7
+--- /dev/null
++++ b/ilcdb-racket/api/birth-place.rkt
+@@ -0,0 +1,60 @@
++#lang racket
++
++(provide birth-place-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         json
++         "../db/birth-place.rkt"
++         "../models/birth-place.rkt")
++
++(define-values (birth-place-api-dispatcher _)
++  (dispatch-rules
++   [("api" "birth-place")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-birth-places req)]
++        ["POST" (post-birth-place req)]))]
++   [("api" "birth-place" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-birth-place req id)]
++        ["PUT" (put-birth-place req id)]
++        ["DELETE" (delete-birth-place req id)]))]))
++
++(define (get-all-birth-places request)
++  (let ([birth-places (birth-place-read-all)])
++    (response/jsexpr (map birth-place->jsexpr birth-places))))
++
++(define (get-birth-place request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([bp (birth-place-read id)])
++        (if bp
++            (response/jsexpr (birth-place->jsexpr bp))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-birth-place request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [city (hash-ref json-body 'city)]
++         [state (hash-ref json-body 'state)]
++         [country-id (hash-ref json-body 'country-id)])
++    (let ([new-id (birth-place-create city state country-id)])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-birth-place request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [city (hash-ref json-body 'city)]
++         [state (hash-ref json-body 'state)]
++         [country-id (hash-ref json-body 'country-id)])
++    (birth-place-update id city state country-id)
++    (response/full 200 #"OK")))
++
++(define (delete-birth-place request id-str)
++  (let ([id (string->number id-str)])
++    (birth-place-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/client.rkt b/ilcdb-racket/api/client.rkt
+new file mode 100644
+index 0000000..c6b1652
+--- /dev/null
++++ b/ilcdb-racket/api/client.rkt
+@@ -0,0 +1,67 @@
++#lang racket
++
++(provide client-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         gregor
++         json
++         "../db/client.rkt"
++         "../models/client.rkt")
++
++(define-values (client-api-dispatcher _)
++  (dispatch-rules
++   [("api" "client")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-clients req)]
++        ["POST" (post-client req)]))]
++   [("api" "client" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-client req id)]
++        ["PUT" (put-client req id)]
++        ["DELETE" (delete-client req id)]))]))
++
++(define (get-all-clients request)
++  (let ([clients (client-read-all)])
++    (response/jsexpr (map client->jsexpr clients))))
++
++(define (get-client request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([c (client-read id)])
++        (if c
++            (response/jsexpr (client->jsexpr c))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-client request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [person-id (hash-ref json-body 'person-id)]
++         [first-visit (hash-ref json-body 'first-visit #f)]
++         [household-income-level (hash-ref json-body 'household-income-level #f)]
++         [number-in-household (hash-ref json-body 'number-in-household #f)]
++         [file-location (hash-ref json-body 'file-location #f)]
++         [ami-id (hash-ref json-body 'ami-id)])
++    (let ([new-id (client-create person-id (and first-visit (iso8601->datetime first-visit)) household-income-level number-in-household file-location ami-id)])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-client request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [person-id (hash-ref json-body 'person-id)]
++         [first-visit (hash-ref json-body 'first-visit #f)]
++         [household-income-level (hash-ref json-body 'household-income-level #f)]
++         [number-in-household (hash-ref json-body 'number-in-household #f)]
++         [file-location (hash-ref json-body 'file-location #f)]
++         [ami-id (hash-ref json-body 'ami-id)])
++    (client-update id person-id (and first-visit (iso8601->datetime first-visit)) household-income-level number-in-household file-location ami-id)
++    (response/full 200 #"OK")))
++
++(define (delete-client request id-str)
++  (let ([id (string->number id-str)])
++    (client-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/country.rkt b/ilcdb-racket/api/country.rkt
+new file mode 100644
+index 0000000..87b25f3
+--- /dev/null
++++ b/ilcdb-racket/api/country.rkt
+@@ -0,0 +1,56 @@
++#lang racket
++
++(provide country-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         json
++         "../db/country.rkt"
++         "../models/country.rkt")
++
++(define-values (country-api-dispatcher _)
++  (dispatch-rules
++   [("api" "country")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-countries req)]
++        ["POST" (post-country req)]))]
++   [("api" "country" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-country req id)]
++        ["PUT" (put-country req id)]
++        ["DELETE" (delete-country req id)]))]))
++
++(define (get-all-countries request)
++  (let ([countries (country-read-all)])
++    (response/jsexpr (map country->jsexpr countries))))
++
++(define (get-country request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([c (country-read id)])
++        (if c
++            (response/jsexpr (country->jsexpr c))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-country request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [name (hash-ref json-body 'name)])
++    (let ([new-id (country-create name)])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-country request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [name (hash-ref json-body 'name)])
++    (country-update id name)
++    (response/full 200 #"OK")))
++
++(define (delete-country request id-str)
++  (let ([id (string->number id-str)])
++    (country-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/api/person.rkt b/ilcdb-racket/api/person.rkt
+new file mode 100644
+index 0000000..f40ea47
+--- /dev/null
++++ b/ilcdb-racket/api/person.rkt
+@@ -0,0 +1,80 @@
++#lang racket
++
++(provide person-api-dispatcher)
++
++(require web-server/servlet-env
++         web-server/dispatch
++         web-server/http
++         web-server/http/request-structs
++         racket/match
++         gregor
++         json
++         db/base
++         "../db/person.rkt"
++         "../models/person.rkt")
++
++(define-values (person-api-dispatcher _)
++  (dispatch-rules
++   [("api" "person")
++    (lambda (req)
++      (match (request-method req)
++        ["GET" (get-all-people req)]
++        ["POST" (post-person req)]))]
++   [("api" "person" (string-arg))
++    (lambda (req id)
++      (match (request-method req)
++        ["GET" (get-person req id)]
++        ["PUT" (put-person req id)]
++        ["DELETE" (delete-person req id)]))]))
++
++(define (get-all-people request)
++  (let ([people (person-read-all)])
++    (response/jsexpr (map person->jsexpr people))))
++
++(define (get-person request id-str)
++  (let ([id (string->number id-str)])
++    (with-handlers ([exn:fail? (lambda (e) (response/full 404 #"Not Found"))])
++      (let ([p (person-read id)])
++        (if p
++            (response/jsexpr (person->jsexpr p))
++            (response/full 404 #"Not Found"))))))
++
++(define (post-person request)
++  (let* ([json-body (bytes->jsexpr (request-post-data/raw request))]
++         [address-id (hash-ref json-body 'address-id)]
++         [english-proficiency (hash-ref json-body 'english-proficiency #f)]
++         [first-name (hash-ref json-body 'first-name)]
++         [last-name (hash-ref json-body 'last-name)]
++         [gender (hash-ref json-body 'gender #f)]
++         [email-address (hash-ref json-body 'email-address #f)]
++         [date-of-birth (hash-ref json-body 'date-of-birth #f)]
++         [phone-number (hash-ref json-body 'phone-number #f)]
++         [place-of-birth-id (hash-ref json-body 'place-of-birth-id #f)]
++         [race (hash-ref json-body 'race #f)])
++    (let ([new-id (person-create address-id english-proficiency first-name last-name gender email-address
++                                 (and date-of-birth (iso8601->datetime date-of-birth))
++                                 phone-number place-of-birth-id race)])
++      (response/jsexpr (hasheq 'id new-id)))))
++
++(define (put-person request id-str)
++  (let* ([id (string->number id-str)]
++         [json-body (bytes->jsexpr (request-post-data/raw request))]
++         [address-id (hash-ref json-body 'address-id)]
++         [english-proficiency (hash-ref json-body 'english-proficiency #f)]
++         [first-name (hash-ref json-body 'first-name)]
++         [last-name (hash-ref json-body 'last-name)]
++         [gender (hash-ref json-body 'gender #f)]
++         [email-address (hash-ref json-body 'email-address #f)]
++         [date-of-birth (hash-ref json-body 'date-of-birth #f)]
++         [phone-number (hash-ref json-body 'phone-number #f)]
++         [place-of-birth-id (hash-ref json-body 'place-of-birth-id #f)]
++         [race (hash-ref json-body 'race #f)])
++    (person-update id address-id english-proficiency first-name last-name gender email-address
++                   (and date-of-birth (iso8601->datetime date-of-birth))
++                   phone-number place-of-birth-id race)
++    (response/full 200 #"OK")))
++
++(define (delete-person request id-str)
++  (let ([id (string->number id-str)])
++    (person-delete id)
++    (response/full 200 #"OK")))
+\ No newline at end of file
+diff --git a/ilcdb-racket/case_types.sql b/ilcdb-racket/case_types.sql
+new file mode 100644
+index 0000000..c2422e9
+--- /dev/null
++++ b/ilcdb-racket/case_types.sql
+@@ -0,0 +1,16 @@
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Adjustment of Status', 'LPR');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Affirmative Asylum', 'Asylee');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Consular Processing', 'Immigrant Visa');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'DACA', 'DACA');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Naturalization', 'US Citizen');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'U-Visa', 'U-Visa');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'T-Visa', 'T-Visa');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'VAWA', 'VAWA');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'SIJS', 'SIJS');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'TPS', 'TPS');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'NACARA', 'NACARA');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Renewal of LPR Card', 'LPR');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'FOIA', 'None');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Work Permit', 'None');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Travel Document', 'None');
++INSERT INTO `case_type` (version, deprecated, type, associated_status) VALUES (0, 0, 'Other', 'None');
+\ No newline at end of file
+diff --git a/ilcdb-racket/countries.sql b/ilcdb-racket/countries.sql
+new file mode 100644
+index 0000000..e84ccd3
+--- /dev/null
++++ b/ilcdb-racket/countries.sql
+@@ -0,0 +1,10 @@
++INSERT INTO `country` (version, name) VALUES (0, 'United States');
++INSERT INTO `country` (version, name) VALUES (0, 'Mexico');
++INSERT INTO `country` (version, name) VALUES (0, 'Canada');
++INSERT INTO `country` (version, name) VALUES (0, 'Guatemala');
++INSERT INTO `country` (version, name) VALUES (0, 'El Salvador');
++INSERT INTO `country` (version, name) VALUES (0, 'Honduras');
++INSERT INTO `country` (version, name) VALUES (0, 'Nicaragua');
++INSERT INTO `country` (version, name) VALUES (0, 'Brazil');
++INSERT INTO `country` (version, name) VALUES (0, 'Colombia');
++INSERT INTO `country` (version, name) VALUES (0, 'Venezuela');
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/address.rkt b/ilcdb-racket/db/address.rkt
+new file mode 100644
+index 0000000..deeacd0
+--- /dev/null
++++ b/ilcdb-racket/db/address.rkt
+@@ -0,0 +1,66 @@
++#lang racket
++
++(provide address-create
++         address-read
++         address-read-all
++         address-update
++         address-delete)
++
++(require db
++         db/base
++         "../models/address.rkt"
++         "./country.rkt"
++         "connection.rkt")
++
++(define select-cols "SELECT `id`, `version`, `street`, `city`, `county`, `state`, `postal_code`, `country_id`, `person_id` FROM `address`")
++
++(define (row->address-struct row)
++  (let ([country-id (vector-ref row 7)])
++    (make-address (vector-ref row 0) ; id
++                  (vector-ref row 1) ; version
++                  (vector-ref row 2) ; street
++                  (vector-ref row 3) ; city
++                  (vector-ref row 4) ; county
++                  (vector-ref row 5) ; state
++                  (vector-ref row 6) ; postal_code
++                  (country-read country-id) ; nested country struct
++                  (vector-ref row 8)))) ; person_id (as ID)
++
++(define (address-create street city county state postal-code country-id person-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `address` (`version`, `street`, `city`, `county`, `state`, `postal_code`, `country_id`, `person_id`) VALUES (0, ?, ?, ?, ?, ?, ?, ?)"
++                    street city county state postal-code country-id person-id)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (address-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
++    (disconnect conn)
++    (and result (row->address-struct result))))
++
++(define (address-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn select-cols)])
++    (disconnect conn)
++    (map row->address-struct result)))
++
++(define (address-update id street city county state postal-code country-id person-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `address` SET `street` = ?, `city` = ?, `county` = ?, `state` = ?, `postal_code` = ?, `country_id` = ?, `person_id` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    street city county state postal-code country-id person-id id))
++      (lambda () (disconnect conn)))))
++
++(define (address-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `address` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/ami.rkt b/ilcdb-racket/db/ami.rkt
+new file mode 100644
+index 0000000..4d566b1
+--- /dev/null
++++ b/ilcdb-racket/db/ami.rkt
+@@ -0,0 +1,56 @@
++#lang racket
++
++(provide ami-create
++         ami-read
++         ami-read-all
++         ami-update
++         ami-delete)
++
++(require db
++         "../models/ami.rkt"
++         "connection.rkt")
++
++(define (row->ami-struct row)
++  (make-ami (vector-ref row 0)
++            (vector-ref row 1)
++            (vector-ref row 2)
++            (vector-ref row 3)))
++
++(define (ami-create label level)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `ami` (`version`, `label`, `level`) VALUES (0, ?, ?)"
++                    label level)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (ami-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn "SELECT * FROM `ami` WHERE `id` = ?" id)])
++    (disconnect conn)
++    (and result (row->ami-struct result))))
++
++(define (ami-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn "SELECT * FROM `ami`")])
++    (disconnect conn)
++    (map row->ami-struct result)))
++
++(define (ami-update id label level)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `ami` SET `label` = ?, `level` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    label level id))
++      (lambda () (disconnect conn)))))
++
++(define (ami-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `ami` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/birth-place.rkt b/ilcdb-racket/db/birth-place.rkt
+new file mode 100644
+index 0000000..c52f267
+--- /dev/null
++++ b/ilcdb-racket/db/birth-place.rkt
+@@ -0,0 +1,59 @@
++#lang racket
++
++(provide birth-place-create
++         birth-place-read
++         birth-place-read-all
++         birth-place-update
++         birth-place-delete)
++
++(require db
++         "../models/birth-place.rkt"
++         "./country.rkt"
++         "connection.rkt")
++
++(define (row->birth-place-struct row)
++  (let ([country-id (vector-ref row 4)])
++    (make-birth-place (vector-ref row 0)    ; id
++                      (vector-ref row 1)    ; version
++                      (vector-ref row 2)    ; city
++                      (vector-ref row 3)    ; state
++                      (country-read country-id)))) ; country struct
++
++(define (birth-place-create city state country-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `birth_place` (`version`, `city`, `state`, `country_id`) VALUES (0, ?, ?, ?)"
++                    city state country-id)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (birth-place-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn "SELECT * FROM `birth_place` WHERE `id` = ?" id)])
++    (disconnect conn)
++    (and result (row->birth-place-struct result))))
++
++(define (birth-place-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn "SELECT * FROM `birth_place`")])
++    (disconnect conn)
++    (map row->birth-place-struct result)))
++
++(define (birth-place-update id city state country-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `birth_place` SET `city` = ?, `state` = ?, `country_id` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    city state country-id id))
++      (lambda () (disconnect conn)))))
++
++(define (birth-place-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `birth_place` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/client.rkt b/ilcdb-racket/db/client.rkt
+new file mode 100644
+index 0000000..d4e0736
+--- /dev/null
++++ b/ilcdb-racket/db/client.rkt
+@@ -0,0 +1,69 @@
++#lang racket
++
++(provide client-create
++         client-read
++         client-read-all
++         client-update
++         client-delete)
++
++(require db
++         db/base
++         gregor
++         "../models/client.rkt"
++         "./person.rkt"
++         "./ami.rkt"
++         "connection.rkt")
++
++(define select-cols "SELECT `id`, `version`, `client_id`, `first_visit`, `first_visit_string`, `household_income_level`, `number_in_household`, `file_location`, `ami_id` FROM `client`")
++
++(define (row->client-struct row)
++  (let ([person-id (vector-ref row 2)]
++        [ami-id (vector-ref row 8)])
++    (make-client (vector-ref row 0)    ; id
++                 (vector-ref row 1)    ; version
++                 (person-read person-id) ; person object
++                 (vector-ref row 3)    ; first_visit
++                 (vector-ref row 4)    ; first_visit_string
++                 (vector-ref row 5)    ; household_income_level
++                 (vector-ref row 6)    ; number_in_household
++                 (vector-ref row 7)    ; file_location
++                 (ami-read ami-id))))    ; ami object
++
++(define (client-create person-id first-visit household-income-level number-in-household file-location ami-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `client` (`version`, `client_id`, `first_visit`, `household_income_level`, `number_in_household`, `file_location`, `ami_id`) VALUES (0, ?, ?, ?, ?, ?, ?)"
++                    person-id (and first-visit (datetime->iso8601 first-visit)) household-income-level number-in-household file-location ami-id)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (client-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
++    (disconnect conn)
++    (and result (row->client-struct result))))
++
++(define (client-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn select-cols)])
++    (disconnect conn)
++    (map row->client-struct result)))
++
++(define (client-update id person-id first-visit household-income-level number-in-household file-location ami-id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `client` SET `client_id` = ?, `first_visit` = ?, `household_income_level` = ?, `number_in_household` = ?, `file_location` = ?, `ami_id` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    person-id (and first-visit (datetime->iso8601 first-visit)) household-income-level number-in-household file-location ami-id id))
++      (lambda () (disconnect conn)))))
++
++(define (client-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `client` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/connection.rkt b/ilcdb-racket/db/connection.rkt
+new file mode 100644
+index 0000000..849eae2
+--- /dev/null
++++ b/ilcdb-racket/db/connection.rkt
+@@ -0,0 +1,13 @@
++#lang racket
++
++(provide get-connection)
++
++(require db/mysql)
++
++(define (get-connection)
++  (let ([db-host (getenv "DB_HOST")])
++    (mysql-connect #:user "ilcdb_user"
++                   #:password "ilcdb_password"
++                   #:database "ilcdb"
++                   #:server (if db-host db-host "127.0.0.1")
++                   #:port 3306)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/country.rkt b/ilcdb-racket/db/country.rkt
+new file mode 100644
+index 0000000..f0a521e
+--- /dev/null
++++ b/ilcdb-racket/db/country.rkt
+@@ -0,0 +1,54 @@
++#lang racket
++
++(provide country-create
++         country-read
++         country-read-all
++         country-update
++         country-delete)
++
++(require db
++         "../models/country.rkt"
++         "connection.rkt")
++
++(define (row->country-struct row)
++  (make-country (vector-ref row 0)
++                (vector-ref row 1)
++                (vector-ref row 2)))
++
++(define (country-create name)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `country` (`version`, `name`) VALUES (0, ?)" name)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (country-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn "SELECT * FROM `country` WHERE `id` = ?" id)])
++    (disconnect conn)
++    (and result (row->country-struct result))))
++
++(define (country-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn "SELECT * FROM `country`")])
++    (disconnect conn)
++    (map row->country-struct result)))
++
++(define (country-update id name)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `country` SET `name` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    name id))
++      (lambda () (disconnect conn)))))
++
++(define (country-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `country` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/db/person.rkt b/ilcdb-racket/db/person.rkt
+new file mode 100644
+index 0000000..fbda588
+--- /dev/null
++++ b/ilcdb-racket/db/person.rkt
+@@ -0,0 +1,71 @@
++#lang racket
++
++(provide person-create
++         person-read
++         person-read-all
++         person-update
++         person-delete)
++
++(require db
++         db/base
++         "../models/person.rkt"
++         "./address.rkt"
++         "./birth-place.rkt"
++         "connection.rkt")
++
++(define select-cols "SELECT `id`, `version`, `address_id`, `english_proficiency`, `first_name`, `last_name`, `gender`, `email_address`, `date_of_birth`, `phone_number`, `place_of_birth_id`, `race` FROM `person`")
++
++(define (row->person-struct row)
++  (let ([address-id (vector-ref row 2)]
++        [place-of-birth-id (vector-ref row 10)])
++    (make-person (vector-ref row 0)    ; id
++                 (vector-ref row 1)    ; version
++                 (address-read address-id) ; address
++                 (vector-ref row 3)    ; english_proficiency
++                 (vector-ref row 4)    ; first_name
++                 (vector-ref row 5)    ; last_name
++                 (vector-ref row 6)    ; gender
++                 (vector-ref row 7)    ; email_address
++                 (vector-ref row 8)    ; date_of_birth
++                 (vector-ref row 9)    ; phone_number
++                 (and place-of-birth-id (birth-place-read place-of-birth-id)) ; place_of_birth
++                 (vector-ref row 11)))) ; race
++
++(define (person-create address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "INSERT INTO `person` (`version`, `address_id`, `english_proficiency`, `first_name`, `last_name`, `gender`, `email_address`, `date_of_birth`, `phone_number`, `place_of_birth_id`, `race`) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
++                    address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
++        (query-value conn "SELECT LAST_INSERT_ID()"))
++      (lambda () (disconnect conn)))))
++
++(define (person-read id)
++  (let* ([conn (get-connection)]
++         [result (query-row conn (string-append select-cols " WHERE `id` = ?") id)])
++    (disconnect conn)
++    (and result (row->person-struct result))))
++
++(define (person-read-all)
++  (let* ([conn (get-connection)]
++         [result (query-rows conn select-cols)])
++    (disconnect conn)
++    (map row->person-struct result)))
++
++(define (person-update id address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "UPDATE `person` SET `address_id` = ?, `english_proficiency` = ?, `first_name` = ?, `last_name` = ?, `gender` = ?, `email_address` = ?, `date_of_birth` = ?, `phone_number` = ?, `place_of_birth_id` = ?, `race` = ?, `version` = `version` + 1 WHERE `id` = ?"
++                    address-id english-proficiency first-name last-name gender email-address date-of-birth phone-number place-of-birth-id race id))
++      (lambda () (disconnect conn)))))
++
++(define (person-delete id)
++  (let ([conn (get-connection)])
++    (dynamic-wind
++      (lambda () #t)
++      (lambda ()
++        (query-exec conn "DELETE FROM `person` WHERE `id` = ?" id))
++      (lambda () (disconnect conn)))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/generate-test-data.rkt b/ilcdb-racket/generate-test-data.rkt
+new file mode 100644
+index 0000000..7d732f0
+--- /dev/null
++++ b/ilcdb-racket/generate-test-data.rkt
+@@ -0,0 +1,129 @@
++#lang racket
++
++(require db/mysql
++         gregor
++         racket/random
++         racket/port
++         racket/file
++         "db/connection.rkt")
++
++;; --- Configuration ---
++(define num-clients-to-generate 1000)
++(define first-names '("John" "Jane" "Peter" "Mary" "David" "Susan" "Michael" "Linda" "James" "Patricia"))
++(define last-names '("Smith" "Jones" "Williams" "Brown" "Davis" "Miller" "Wilson" "Moore" "Taylor" "Anderson"))
++(define cities '("Springfield" "Greenville" "Franklin" "Clinton" "Bristol" "Fairview" "Salem" "Madison"))
++(define states '("CA" "TX" "FL" "NY" "PA" "IL" "OH" "GA" "NC" "MI"))
++(define streets '("Main St" "Oak Ave" "Maple St" "Pine St" "Washington St" "Elm St" "Cedar St"))
++(define genders '("Male" "Female" "Other"))
++(define races '("White" "Black" "Asian" "Hispanic" "Other"))
++(define english-proficiencies '("Fluent" "Good" "Basic" "None"))
++
++;; --- Helper Functions ---
++(define (random-element lst)
++  (list-ref lst (random (length lst))))
++
++(define (random-date start-year end-year)
++  (let* ([year (+ start-year (random (- end-year start-year)))]
++         [month (+ 1 (random 12))]
++         [day (+ 1 (random 28))]) ; Keep it simple
++    (datetime year month day)))
++
++(define (random-phone)
++  (string-append
++   (number->string (+ 100 (random 900))) "-"
++   (number->string (+ 100 (random 900))) "-"
++   (number->string (+ 1000 (random 9000)))))
++
++(define (execute-sql-file conn path)
++  (with-input-from-file path
++    (lambda ()
++      (for ([line (in-lines)])
++        (when (string-contains? line "INSERT")
++          (query-exec conn line))))))
++
++(define (main)
++  (printf "Connecting to database...\n")
++  (let ([conn (get-connection)])
++    (dynamic-wind
++     (lambda () #t)
++     (lambda ()
++       (printf "Clearing existing data (client, person, address, birth_place, ami, country, case_type)...\n")
++       (for-each (lambda (table) (query-exec conn (string-append "DELETE FROM " table)))
++                 '("`client_case`" "`client`" "`person`" "`address`" "`birth_place`" "`ami`" "`country`" "`case_type`"))
++       
++       (printf "Populating 'country' and 'case_type' tables from SQL files...\n")
++       (execute-sql-file conn "ilcdb-racket/countries.sql")
++       (execute-sql-file conn "ilcdb-racket/case_types.sql")
++
++       (printf "Populating 'ami' table...\n")
++       (query-exec conn "INSERT INTO `ami` (version, label, level) VALUES (0, '30% AMI', 1)")
++       (query-exec conn "INSERT INTO `ami` (version, label, level) VALUES (0, '50% AMI', 2)")
++       (query-exec conn "INSERT INTO `ami` (version, label, level) VALUES (0, '80% AMI', 3)")
++       (query-exec conn "INSERT INTO `ami` (version, label, level) VALUES (0, '120% AMI', 4)")
++
++       (let ([country-ids (query-list conn "SELECT id FROM `country`" #:column 0)]
++             [ami-ids (query-list conn "SELECT id FROM `ami`" #:column 0)])
++
++         (printf "Generating ~a clients...\n" num-clients-to-generate)
++         (for ([i (in-range num-clients-to-generate)])
++           (when (= (modulo i 100) 0) (printf "  Generated ~a clients...\n" i))
++
++           ;; 1. Create Birth Place
++           (let* ([bp-country-id (random-element country-ids)]
++                  [bp-city (random-element cities)]
++                  [bp-state (random-element states)]
++                  [birth-place-id
++                   (begin
++                     (query-exec conn "INSERT INTO `birth_place` (version, city, state, country_id) VALUES (0, ?, ?, ?)" bp-city bp-state bp-country-id)
++                     (query-value conn "SELECT LAST_INSERT_ID()"))])
++
++             ;; 2. Create Address (initially without person_id)
++             (let* ([addr-country-id (random-element country-ids)]
++                    [addr-street (string-append (number->string (random 1000)) " " (random-element streets))]
++                    [addr-city (random-element cities)]
++                    [addr-state (random-element states)]
++                    [addr-postal (number->string (+ 10000 (random 90000)))]
++                    [address-id
++                     (begin
++                       (query-exec conn "INSERT INTO `address` (version, street, city, county, state, postal_code, country_id, person_id) VALUES (0, ?, ?, ?, ?, ?, ?, NULL)"
++                                   addr-street addr-city "County" addr-state addr-postal addr-country-id)
++                       (query-value conn "SELECT LAST_INSERT_ID()"))])
++
++               ;; 3. Create Person
++               (let* ([first-name (random-element first-names)]
++                      [last-name (random-element last-names)]
++                      [dob (datetime->sql-timestamp (random-date 1950 2005))]
++                      [person-id
++                       (begin
++                         (query-exec conn "INSERT INTO `person` (version, address_id, english_proficiency, first_name, last_name, gender, email_address, date_of_birth, phone_number, place_of_birth_id, race) VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
++                                     address-id
++                                     (random-element english-proficiencies)
++                                     first-name
++                                     last-name
++                                     (random-element genders)
++                                     (string-append (string-downcase first-name) "." (string-downcase last-name) "@example.com")
++                                     dob
++                                     (random-phone)
++                                     birth-place-id
++                                     (random-element races))
++                         (query-value conn "SELECT LAST_INSERT_ID()"))])
++
++                 ;; 4. Update Address with the new person_id
++                 (query-exec conn "UPDATE `address` SET person_id = ? WHERE id = ?" person-id address-id)
++
++                 ;; 5. Create Client
++                 (let ([ami-id (random-element ami-ids)]
++                       [first-visit (datetime->sql-timestamp (random-date 2010 2023))])
++                   (query-exec conn "INSERT INTO `client` (version, client_id, first_visit, household_income_level, number_in_household, file_location, ami_id) VALUES (0, ?, ?, ?, ?, ?, ?)"
++                               person-id
++                               first-visit
++                               (+ 20000 (random 50000))
++                               (+ 1 (random 5))
++                               (format "File-~a" person-id)
++                               ami-id))))))) 
++         (printf "Finished generating ~a clients.\n" num-clients-to-generate)))
++     (lambda ()
++       (printf "Closing database connection.\n")
++       (disconnect conn)))))
++
++(main)
+\ No newline at end of file
+diff --git a/ilcdb-racket/main.rkt b/ilcdb-racket/main.rkt
+new file mode 100644
+index 0000000..02f2fc1
+--- /dev/null
++++ b/ilcdb-racket/main.rkt
+@@ -0,0 +1,48 @@
++#lang racket
++
++(provide start-in-background
++         stop-from-background)
++
++(require web-server/web-server
++         (prefix-in sequencer: web-server/dispatchers/dispatch-sequencer)
++         "api/person.rkt"
++         "api/country.rkt"
++         "api/birth-place.rkt"
++         "api/address.rkt"
++         "api/ami.rkt"
++         "api/client.rkt"
++         "pages/main.rkt")
++
++(define shutdown-server #f)
++
++(define main-dispatcher
++  (sequencer:make
++   (lambda (conn req) (person-api-dispatcher req))
++   (lambda (conn req) (country-api-dispatcher req))
++   (lambda (conn req) (birth-place-api-dispatcher req))
++   (lambda (conn req) (address-api-dispatcher req))
++   (lambda (conn req) (ami-api-dispatcher req))
++   (lambda (conn req) (client-api-dispatcher req))
++   (lambda (conn req) (page-dispatcher req))))
++
++(define (start-in-background)
++  (set! shutdown-server
++        (serve #:dispatch main-dispatcher
++               #:port 8080)))
++
++(define (stop-from-background)
++  (when (procedure? shutdown-server)
++    (shutdown-server)
++    (set! shutdown-server #f)))
++
++(define (main)
++  (define shutdown
++    (serve #:dispatch main-dispatcher
++           #:port 8080))
++  (displayln "Server started. Press Ctrl+C to stop.")
++  (sync/enable-break (make-semaphore 0))
++  (shutdown))
++
++#;(when (eq? (find-system-path 'run-file)
++           (find-system-path 'main-file))
++  (main))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/address.rkt b/ilcdb-racket/models/address.rkt
+new file mode 100644
+index 0000000..8e1b1d9
+--- /dev/null
++++ b/ilcdb-racket/models/address.rkt
+@@ -0,0 +1,38 @@
++#lang racket
++
++(provide make-address
++         address?
++         address-id
++         address-version
++         address-street
++         address-city
++         address-county
++         address-state
++         address-postal-code
++         address-country
++         address-person-id
++         address->jsexpr)
++
++(require "./country.rkt")
++
++(define-struct address
++  (id
++   version
++   street
++   city
++   county
++   state
++   postal-code
++   country
++   person-id)) ; person-id is kept as an ID to break circular dependency
++
++(define (address->jsexpr a)
++  (hasheq 'id (address-id a)
++          'version (address-version a)
++          'street (address-street a)
++          'city (address-city a)
++          'county (address-county a)
++          'state (address-state a)
++          'postal-code (address-postal-code a)
++          'country (country->jsexpr (address-country a))
++          'person-id (address-person-id a)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/ami.rkt b/ilcdb-racket/models/ami.rkt
+new file mode 100644
+index 0000000..540f04d
+--- /dev/null
++++ b/ilcdb-racket/models/ami.rkt
+@@ -0,0 +1,21 @@
++#lang racket
++
++(provide make-ami
++         ami?
++         ami-id
++         ami-version
++         ami-label
++         ami-level
++         ami->jsexpr)
++
++(define-struct ami
++  (id
++   version
++   label
++   level))
++
++(define (ami->jsexpr a)
++  (hasheq 'id (ami-id a)
++          'version (ami-version a)
++          'label (ami-label a)
++          'level (ami-level a)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/birth-place.rkt b/ilcdb-racket/models/birth-place.rkt
+new file mode 100644
+index 0000000..d98842d
+--- /dev/null
++++ b/ilcdb-racket/models/birth-place.rkt
+@@ -0,0 +1,26 @@
++#lang racket
++
++(provide make-birth-place
++         birth-place?
++         birth-place-id
++         birth-place-version
++         birth-place-city
++         birth-place-state
++         birth-place-country
++         birth-place->jsexpr)
++
++(require "./country.rkt")
++
++(define-struct birth-place
++  (id
++   version
++   city
++   state
++   country))
++
++(define (birth-place->jsexpr bp)
++  (hasheq 'id (birth-place-id bp)
++          'version (birth-place-version bp)
++          'city (birth-place-city bp)
++          'state (birth-place-state bp)
++          'country (country->jsexpr (birth-place-country bp))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/client.rkt b/ilcdb-racket/models/client.rkt
+new file mode 100644
+index 0000000..ed37673
+--- /dev/null
++++ b/ilcdb-racket/models/client.rkt
+@@ -0,0 +1,40 @@
++#lang racket
++
++(provide make-client
++         client?
++         client-id
++         client-version
++         client-person
++         client-first-visit
++         client-first-visit-string
++         client-household-income-level
++         client-number-in-household
++         client-file-location
++         client-ami
++         client->jsexpr)
++
++(require gregor
++         "./person.rkt"
++         "./ami.rkt")
++
++(define-struct client
++  (id
++   version
++   person
++   first-visit
++   first-visit-string
++   household-income-level
++   number-in-household
++   file-location
++   ami))
++
++(define (client->jsexpr c)
++  (hasheq 'id (client-id c)
++          'version (client-version c)
++          'person (person->jsexpr (client-person c))
++          'first-visit (and (client-first-visit c) (datetime->iso8601 (client-first-visit c)))
++          'first-visit-string (client-first-visit-string c)
++          'household-income-level (client-household-income-level c)
++          'number-in-household (client-number-in-household c)
++          'file-location (client-file-location c)
++          'ami (ami->jsexpr (client-ami c))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/country.rkt b/ilcdb-racket/models/country.rkt
+new file mode 100644
+index 0000000..1e99e87
+--- /dev/null
++++ b/ilcdb-racket/models/country.rkt
+@@ -0,0 +1,18 @@
++#lang racket
++
++(provide make-country
++         country?
++         country-id
++         country-version
++         country-name
++         country->jsexpr)
++
++(define-struct country
++  (id
++   version
++   name))
++
++(define (country->jsexpr c)
++  (hasheq 'id (country-id c)
++          'version (country-version c)
++          'name (country-name c)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/models/person.rkt b/ilcdb-racket/models/person.rkt
+new file mode 100644
+index 0000000..beb61b9
+--- /dev/null
++++ b/ilcdb-racket/models/person.rkt
+@@ -0,0 +1,49 @@
++#lang racket
++
++(provide make-person
++         person?
++         person-id
++         person-version
++         person-address
++         person-english-proficiency
++         person-first-name
++         person-last-name
++         person-gender
++         person-email-address
++         person-date-of-birth
++         person-phone-number
++         person-place-of-birth
++         person-race
++         person->jsexpr)
++
++(require gregor
++         "./address.rkt"
++         "./birth-place.rkt")
++
++(define-struct person
++  (id
++   version
++   address
++   english-proficiency
++   first-name
++   last-name
++   gender
++   email-address
++   date-of-birth
++   phone-number
++   place-of-birth
++   race))
++
++(define (person->jsexpr p)
++  (hasheq 'id (person-id p)
++          'version (person-version p)
++          'address (address->jsexpr (person-address p))
++          'english-proficiency (person-english-proficiency p)
++          'first-name (person-first-name p)
++          'last-name (person-last-name p)
++          'gender (person-gender p)
++          'email-address (person-email-address p)
++          'date-of-birth (and (person-date-of-birth p) (datetime->iso8601 (person-date-of-birth p)))
++          'phone-number (person-phone-number p)
++          'place-of-birth (and (person-place-of-birth p) (birth-place->jsexpr (person-place-of-birth p)))
++          'race (person-race p)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/pages/main.rkt b/ilcdb-racket/pages/main.rkt
+new file mode 100644
+index 0000000..4900c6c
+--- /dev/null
++++ b/ilcdb-racket/pages/main.rkt
+@@ -0,0 +1,69 @@
++#lang racket
++
++(provide page-dispatcher)
++
++(require web-server/dispatch
++         web-server/servlet-env
++         web-server/http
++         "../db/person.rkt"
++         "../models/person.rkt")
++
++(define (base-template title . content)
++  `(html
++    (head
++     (title ,title)
++     (meta ([charset "utf-8"]))
++     (meta ([name "viewport"]
++            [content "width=device-width, initial-scale=1"]))
++     (link ([rel "stylesheet"]
++            [href "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"]))
++     (script ([src "https://unpkg.com/htmx.org@1.9.10"]
++              [integrity "sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC"]
++              [crossorigin "anonymous"])))
++    (body
++     (div ([class "container mt-4"])
++          ,@content))))
++
++(define-values (page-dispatcher _)
++  (dispatch-rules
++   [("") (lambda (req) (index-page req))]
++   [("clients") (lambda (req) (clients-page req))]
++   [else (lambda (req) (not-found-page req))]))
++
++(define (index-page request)
++  (response/xexpr
++   (base-template
++    "ILCDB Home"
++    `(h1 "Welcome to ILCDB")
++    `(p "This is the Racket and HTMX version of the application.")
++    `(p (a ([href "/clients"]) "View All Clients")))))
++
++(define (clients-page request)
++  (let ([clients (person-read-all)])
++    (response/xexpr
++     (base-template
++      "Clients"
++      `(h1 "All Clients")
++      `(table ([class "table table-striped"])
++              (thead
++               (tr
++                (th "ID")
++                (th "First Name")
++                (th "Last Name")
++                (th "Email")
++                (th "Phone")))
++              (tbody
++               ,@(for/list ([client clients])
++                   `(tr
++                     (td ,(number->string (person-id client)))
++                     (td ,(person-first-name client))
++                     (td ,(person-last-name client))
++                     (td ,(or (person-email-address client) ""))
++                     (td ,(or (person-phone-number client) ""))))))))))
++
++(define (not-found-page request)
++  (response/xexpr
++   #:code 404
++   (base-template
++    "Not Found"
++    `(h1 "404 - Page Not Found"))))
+\ No newline at end of file
+diff --git a/ilcdb-racket/tests/integration-tests.rkt b/ilcdb-racket/tests/integration-tests.rkt
+new file mode 100644
+index 0000000..e1df870
+--- /dev/null
++++ b/ilcdb-racket/tests/integration-tests.rkt
+@@ -0,0 +1,142 @@
++#lang racket
++
++(require rackunit
++         rackunit/text-ui
++         net/http-client
++         web-server/http
++         racket/bytes
++         json
++         gregor
++         "../main.rkt"
++         "../utils.rkt")
++
++;; --- Helper Functions for Test Dependencies ---
++
++(define (get-id res)
++  (let ([body (port->bytes (caddr res))])
++    (hash-ref (bytes->jsexpr body) 'id)))
++
++(define (create-country)
++  (get-id (http-sendrecv "localhost" "/api/country" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'name "Testland")))))
++(define (delete-country id)
++  (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080 #:method "DELETE"))
++
++(define (create-ami)
++  (get-id (http-sendrecv "localhost" "/api/ami" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'label "Test AMI" 'level 1)))))
++(define (delete-ami id)
++  (http-sendrecv "localhost" (string-append "/api/ami/" (number->string id)) #:port 8080 #:method "DELETE"))
++
++(define (create-birth-place country-id)
++  (get-id (http-sendrecv "localhost" "/api/birth-place" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'city "Testville" 'state "TS" 'country-id country-id)))))
++(define (delete-birth-place id)
++  (http-sendrecv "localhost" (string-append "/api/birth-place/" (number->string id)) #:port 8080 #:method "DELETE"))
++
++(define (create-address country-id)
++  (get-id (http-sendrecv "localhost" "/api/address" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'street "123 Test St" 'city "Testopolis" 'county "Testshire" 'state "TS" 'postal-code "12345" 'country-id country-id)))))
++(define (delete-address id)
++  (http-sendrecv "localhost" (string-append "/api/address/" (number->string id)) #:port 8080 #:method "DELETE"))
++
++(define (create-person address-id birth-place-id)
++  (get-id (http-sendrecv "localhost" "/api/person" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'first-name "John" 'last-name "Tester" 'address-id address-id 'place-of-birth-id birth-place-id)))))
++(define (delete-person id)
++  (http-sendrecv "localhost" (string-append "/api/person/" (number->string id)) #:port 8080 #:method "DELETE"))
++
++(test-suite
++ "ILCDB Full API Integration Tests"
++
++ (with-handlers ([exn:fail? (lambda (ex) (stop-from-background) (raise ex))])
++   (start-in-background)
++   (sleep 2)
++
++   (test-suite
++    "Country API Lifecycle"
++    (let ([id #f])
++      (dynamic-wind
++        (lambda () #t)
++        (lambda ()
++          (test-case "POST" (set! id (create-country)))
++          (test-case "GET /:id"
++                     (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080))
++                     (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'name) "Testland"))
++          (test-case "GET /"
++                     (define-values (s h i) (http-sendrecv "localhost" "/api/country" #:port 8080))
++                     (check-true (list? (bytes->jsexpr (port->bytes i)))))
++          (test-case "PUT" (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080 #:method "PUT" #:data (jsexpr->bytes (hasheq 'name "New Testland"))))
++          (test-case "GET /:id (verify PUT)"
++                     (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/country/" (number->string id)) #:port 8080))
++                     (check-equal? (hash-ref (bytes->jsexpr (port->bytes i)) 'name) "New Testland")))
++        (lambda () (and id (delete-country id))))))
++
++   (test-suite
++    "Person and Dependencies Lifecycle"
++    (let ([country-id #f] [birth-place-id #f] [address-id #f] [person-id #f])
++      (dynamic-wind
++        (lambda ()
++          (set! country-id (create-country))
++          (set! birth-place-id (create-birth-place country-id))
++          (set! address-id (create-address country-id)))
++        (lambda ()
++          (test-case "POST Person" (set! person-id (create-person address-id birth-place-id)))
++          (test-case "GET Person"
++                     (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/person/" (number->string person-id)) #:port 8080))
++                     (let ([json-resp (bytes->jsexpr (port->bytes i))])
++                       (check-equal? (hash-ref json-resp 'first-name) "John")
++                       (check-equal? (hash-ref (hash-ref json-resp 'address) 'street) "123 Test St")
++                       (check-equal? (hash-ref (hash-ref json-resp 'place-of-birth) 'city) "Testville"))))
++        (lambda ()
++          (and person-id (delete-person person-id))
++          (and address-id (delete-address address-id))
++          (and birth-place-id (delete-birth-place birth-place-id))
++          (and country-id (delete-country country-id))))))
++
++   (test-suite
++    "Client API Lifecycle"
++    (let ([country-id #f] [ami-id #f] [birth-place-id #f] [address-id #f] [person-id #f] [id #f])
++      (dynamic-wind
++        (lambda ()
++          (set! country-id (create-country))
++          (set! ami-id (create-ami))
++          (set! birth-place-id (create-birth-place country-id))
++          (set! address-id (create-address country-id))
++          (set! person-id (create-person address-id birth-place-id)))
++        (lambda ()
++          (test-case "POST"
++                     (define-values (s h i) (http-sendrecv "localhost" "/api/client" #:port 8080 #:method "POST" #:data (jsexpr->bytes (hasheq 'person-id person-id 'ami-id ami-id 'household-income-level 50000))))
++                     (check-equal? (bytes->string/utf-8 s) "200 OK")
++                     (set! id (hash-ref (bytes->jsexpr (port->bytes i)) 'id)))
++          (test-case "GET /:id"
++                     (define-values (s h i) (http-sendrecv "localhost" (string-append "/api/client/" (number->string id)) #:port 8080))
++                     (let ([json-resp (bytes->jsexpr (port->bytes i))])
++                       (check-equal? (hash-ref json-resp 'household-income-level) 50000)
++                       (check-equal? (hash-ref (hash-ref json-resp 'person) 'first-name) "John")
++                       (check-equal? (hash-ref (hash-ref json-resp 'ami) 'label) "Test AMI"))))
++        (lambda ()
++          (and id (http-sendrecv "localhost" (string-append "/api/client/" (number->string id)) #:port 8080 #:method "DELETE"))
++          (and person-id (delete-person person-id))
++          (and address-id (delete-address address-id))
++          (and birth-place-id (delete-birth-place birth-place-id))
++          (and country-id (delete-country country-id))
++          (and ami-id (delete-ami ami-id))))))
++   
++   (test-suite
++    "Page Rendering"
++    (test-case
++     "GET / (Home Page)"
++     (define-values (s h i) (http-sendrecv "localhost" "/" #:port 8080))
++     (check-equal? (bytes->string/utf-8 s) "200 OK")
++     (define content-type (headers-assq* #"Content-Type" h))
++     (check-true (bytes-prefix? (header-value content-type) #"text/html"))
++     (define body (port->bytes i))
++     (check-true (bytes-contains? body #"Welcome to ILCDB")))
++    (test-case
++     "GET /clients (Client List Page)"
++     (define-values (s h i) (http-sendrecv "localhost" "/clients" #:port 8080))
++     (check-equal? (bytes->string/utf-8 s) "200 OK")
++     (define content-type (headers-assq* #"Content-Type" h))
++     (check-true (bytes-prefix? (header-value content-type) #"text/html"))
++     (define body (port->bytes i))
++     (check-true (bytes-contains? body #"All Clients"))
++     (check-true (bytes-contains? body #"John"))
++     (check-true (bytes-contains? body #"Tester"))))
++   
++   (stop-from-background)))
+\ No newline at end of file
+diff --git a/ilcdb-racket/utils.rkt b/ilcdb-racket/utils.rkt
+new file mode 100644
+index 0000000..a771d26
+--- /dev/null
++++ b/ilcdb-racket/utils.rkt
+@@ -0,0 +1,13 @@
++#lang racket
++
++(provide bytes-prefix?
++         bytes-contains?)
++
++(define (bytes-prefix? p b)
++  (and (>= (bytes-length b) (bytes-length p))
++       (bytes=? p (subbytes b 0 (bytes-length p)))))
++
++(define (bytes-contains? haystack needle)
++  (if (in-bytes needle haystack)
++      #t
++      #f))

@@ -1,43 +1,33 @@
-name: ilcdb
-
 services:
-  webapp:
-    build: .
-    container_name: ilcdb-webapp
-    image: sbherndon/ilcdb-webapp:latest
-#    image: ilcdb-webapp:latest
-    ports:
-      - "8080:8080"
-#    depends_on:
-#      db:
-#        condition: service_healthy
-    environment:
-      - MYSQL_HOST=db
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=ilcdb
-      - MYSQL_USER=$MYSQL_USER
-      - MYSQL_USER_PASSWORD=$MYSQL_USER_PASSWORD
-
   db:
-    image: mysql:9
-    container_name: ilcdb-mysql
+    image: mysql:8.0
+    container_name: ilcdb-db
+    environment:
+      MYSQL_DATABASE: ilcdb
+      MYSQL_USER: ilcdb_user
+      MYSQL_PASSWORD: ilcdb_password
+      MYSQL_ROOT_PASSWORD: root_password
     ports:
       - "3306:3306"
-    environment:
-      - MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
-      - MYSQL_DATABASE=ilcdb
-      - MYSQL_USER=$MYSQL_USER
-      - MYSQL_USER_PASSWORD=$MYSQL_USER_PASSWORD
     volumes:
-      - mysql_data:/var/lib/mysql
+      - ilcdb-data:/var/lib/mysql
+      - ./ilcdb.schema.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      interval: 10s
       timeout: 5s
-      retries: 2
+      retries: 5
+
+  app:
+    build: .
+    container_name: ilcdb-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db
 
 volumes:
-  mysql_data:  # This line defines the volume
-
-# secrets:
-#   mysql_user_password: ./secrets/mysql_ilcdb_password.txt
-#   mysql_root_password: ./secrets/mysql_root_password.txt
+  ilcdb-data:
